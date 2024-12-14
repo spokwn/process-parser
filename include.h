@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <wincrypt.h>
 #include <vector>
+#include <mscat.h>
 
 #pragma comment(lib, "Crypt32.lib")
 #pragma comment(lib, "Wintrust.lib")
