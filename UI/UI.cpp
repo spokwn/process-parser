@@ -274,7 +274,7 @@ void UI::Render() {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImVec4(0.0f, 1.0f, 0.0f, 1.0f)));
                 }
                 else {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 0.0f, 1.0f)));
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImVec4(0.9f, 0.2f, 0.2f, 1.0f)));
                 }
                 ImGui::Text("%s", info.signature.c_str());
                 ImGui::PopStyleColor();
