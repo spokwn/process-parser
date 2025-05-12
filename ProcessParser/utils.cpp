@@ -137,15 +137,13 @@ std::string getDigitalSignature(const std::string& filePath) {
 		return "Deleted";
 	}
 
-	WINTRUST_FILE_INFO fileInfo;
-	ZeroMemory(&fileInfo, sizeof(fileInfo));
-	fileInfo.cbStruct = sizeof(WINTRUST_FILE_INFO);
+	WINTRUST_FILE_INFO fileInfo = {};
+	fileInfo.cbStruct = sizeof(fileInfo);
 	fileInfo.pcwszFilePath = wideFilePath;
 
 	GUID guidAction = WINTRUST_ACTION_GENERIC_VERIFY_V2;
 
-	WINTRUST_DATA winTrustData;
-	ZeroMemory(&winTrustData, sizeof(winTrustData));
+	WINTRUST_DATA winTrustData = {};
 	winTrustData.cbStruct = sizeof(winTrustData);
 	winTrustData.dwUIChoice = WTD_UI_NONE;
 	winTrustData.fdwRevocationChecks = WTD_REVOKE_NONE;
@@ -153,71 +151,41 @@ std::string getDigitalSignature(const std::string& filePath) {
 	winTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
 	winTrustData.pFile = &fileInfo;
 
-	LONG lStatus = WinVerifyTrust(NULL, &guidAction, &winTrustData);
+	LONG status = WinVerifyTrust(NULL, &guidAction, &winTrustData);
 
 	std::string result = "Not signed";
 
-	if (lStatus == ERROR_SUCCESS) {
+	PCCERT_CONTEXT signingCert = nullptr;
+	if (status == ERROR_SUCCESS) {
 		result = "Signed";
-		CRYPT_PROVIDER_DATA const* psProvData = WTHelperProvDataFromStateData(winTrustData.hWVTStateData);
-		if (psProvData) {
-			CRYPT_PROVIDER_DATA* nonConstProvData = const_cast<CRYPT_PROVIDER_DATA*>(psProvData);
-			CRYPT_PROVIDER_SGNR* pProvSigner = WTHelperGetProvSignerFromChain(nonConstProvData, 0, FALSE, 0);
+
+		auto pProvData = WTHelperProvDataFromStateData(winTrustData.hWVTStateData);
+		if (pProvData) {
+			auto nonConstData = const_cast<CRYPT_PROVIDER_DATA*>(pProvData);
+			auto pProvSigner = WTHelperGetProvSignerFromChain(nonConstData, 0, FALSE, 0);
 			if (pProvSigner) {
-				CRYPT_PROVIDER_CERT* pProvCert = WTHelperGetProvCertFromChain(pProvSigner, 0);
+				auto pProvCert = WTHelperGetProvCertFromChain(pProvSigner, 0);
 				if (pProvCert && pProvCert->pCert) {
-					char subjectName[256] = { 0 };
+					signingCert = pProvCert->pCert;
+					char subjName[256] = {};
 					CertNameToStrA(
-						pProvCert->pCert->dwCertEncodingType,
-						&pProvCert->pCert->pCertInfo->Subject,
+						signingCert->dwCertEncodingType,
+						&signingCert->pCertInfo->Subject,
 						CERT_X500_NAME_STR,
-						subjectName,
-						sizeof(subjectName)
+						subjName,
+						sizeof(subjName)
 					);
-
-					std::string subject(subjectName);
-					std::transform(subject.begin(), subject.end(), subject.begin(), ::tolower);
-
-					if (subject.find("manthe industries, llc") != std::string::npos ||
-						subject.find("slinkware") != std::string::npos              ||
-						subject.find("amstion limited") != std::string::npos) {
-						result = "Cheat Signature";
-					}
-
-					PCCERT_CONTEXT pCert = pProvCert->pCert;
-
-					DWORD hashSize = 0;
-					if (CertGetCertificateContextProperty(pCert, CERT_SHA1_HASH_PROP_ID, nullptr, &hashSize)) {
-						std::vector<BYTE> hash(hashSize);
-						if (CertGetCertificateContextProperty(pCert, CERT_SHA1_HASH_PROP_ID, hash.data(), &hashSize)) {
-							CRYPT_HASH_BLOB hashBlob;
-							hashBlob.cbData = hashSize;
-							hashBlob.pbData = hash.data();
-
-							HCERTSTORE hStore = CertOpenStore(
-								CERT_STORE_PROV_SYSTEM_W,
-								0,
-								NULL,
-								CERT_SYSTEM_STORE_CURRENT_USER | CERT_STORE_OPEN_EXISTING_FLAG,
-								L"Root"
-							);
-
-							if (hStore) {
-								PCCERT_CONTEXT foundCert = CertFindCertificateInStore(
-									hStore,
-									pCert->dwCertEncodingType,
-									0,
-									CERT_FIND_SHA1_HASH,
-									&hashBlob,
-									NULL
-								);
-
-								if (foundCert) {
-									result = "Fake Signature";
-									CertFreeCertificateContext(foundCert);
-								}
-								CertCloseStore(hStore, 0);
-							}
+					std::string subj(subjName);
+					std::transform(subj.begin(), subj.end(), subj.begin(), ::tolower);
+					static const char* cheats[] = {
+						"manthe industries, llc",
+						"slinkware",
+						"amstion limited",
+					};
+					for (auto c : cheats) {
+						if (subj.find(c) != std::string::npos) {
+							result = "Cheat Signature";
+							break;
 						}
 					}
 				}
@@ -233,9 +201,73 @@ std::string getDigitalSignature(const std::string& filePath) {
 	winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
 	WinVerifyTrust(NULL, &guidAction, &winTrustData);
 
+	if (signingCert) {
+		DWORD hashLen = 0;
+		if (CertGetCertificateContextProperty(signingCert, CERT_SHA1_HASH_PROP_ID, nullptr, &hashLen)) {
+			std::vector<BYTE> hash(hashLen);
+			if (CertGetCertificateContextProperty(signingCert, CERT_SHA1_HASH_PROP_ID, hash.data(), &hashLen)) {
+				CRYPT_HASH_BLOB blob = { hashLen, hash.data() };
+
+				static const LPCWSTR storeNames[] = {
+					L"MY",                    // Personal
+					L"Root",                  // Trusted Root CAs
+					L"Trust",                 // Enterprise Trust
+					L"CA",                    // Intermediate CAs
+					L"UserDS",                // Active Directory User Object
+					L"TrustedPublisher",      // Trusted Publishers
+					L"Disallowed",            // Untrusted Certificates
+					L"AuthRoot",              // Third-Party Root CAs
+					L"TrustedPeople",         // Trusted People
+					L"ClientAuthIssuer",      // Client Authentication Issuers
+					L"CertificateEnrollment", // Certificate Enrollment Requests
+					L"SmartCardRoot"          // Smart Card Trusted Roots
+				};
+
+				const DWORD contexts[] = {
+					CERT_SYSTEM_STORE_CURRENT_USER | CERT_STORE_OPEN_EXISTING_FLAG,
+					CERT_SYSTEM_STORE_LOCAL_MACHINE | CERT_STORE_OPEN_EXISTING_FLAG
+				};
+
+				bool foundAnywhere = false;
+				for (DWORD ctx : contexts) {
+					for (auto storeName : storeNames) {
+						HCERTSTORE hStore = CertOpenStore(
+							CERT_STORE_PROV_SYSTEM_W,
+							0,
+							NULL,
+							ctx,
+							storeName
+						);
+						if (!hStore)
+							continue;
+
+						PCCERT_CONTEXT found = CertFindCertificateInStore(
+							hStore,
+							signingCert->dwCertEncodingType,
+							0,
+							CERT_FIND_SHA1_HASH,
+							&blob,
+							NULL
+						);
+						if (found) {
+							foundAnywhere = true;
+							CertFreeCertificateContext(found);
+						}
+						CertCloseStore(hStore, 0);
+						if (foundAnywhere) break;
+					}
+					if (foundAnywhere) break;
+				}
+
+				if (foundAnywhere) {
+					result = "Fake Signature";
+				}
+			}
+		}
+	}
+
 	return result;
 }
-
 void process::initialize() {
     process::setDiagTrackPID(GetServicePID(L"DiagTrack"));
     process::setAppInfoPID(GetServicePID(L"AppInfo"));
